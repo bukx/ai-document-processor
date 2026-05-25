@@ -3,6 +3,23 @@
 > Automated document-processing pipeline using Amazon Textract and Comprehend to extract and classify content from uploaded documents.
 > Repo: [github.com/bukx/ai-document-processor](https://github.com/bukx/ai-document-processor)
 
+## Runnable MVP
+
+This repo now includes a local-first document pipeline that mirrors the cloud
+architecture:
+
+- ingest a local file
+- extract text with a Textract-style adapter
+- classify content with a Comprehend-style adapter
+- emit structured JSON to the `output/` directory
+
+### Run locally
+
+```bash
+python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m ai_document_processor.cli sample_documents/invoice.txt --output-dir output
+```
+
 ![Architecture](./architecture.png)
 
 ## Mermaid view

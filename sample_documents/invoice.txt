@@ -1,0 +1,7 @@
+Invoice #INV-10045
+Vendor: Acme Cloud Services
+Bill To: buyer@example.com
+Due Date: 2026-06-01
+Total Due: $1450.00
+
+Managed Kubernetes support and incident response retainer.
