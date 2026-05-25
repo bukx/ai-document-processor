@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Deployable AI document processing system
+
+Parameters:
+  MaxDocumentBytes:
+    Type: Number
+    Default: 5242880
+  AllowedExtensions:
+    Type: String
+    Default: ".txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.tiff"
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        RAW_BUCKET_NAME: !Ref RawDocumentsBucket
+        PROCESSED_BUCKET_NAME: !Ref ProcessedDocumentsBucket
+        DOCUMENTS_TABLE_NAME: !Ref DocumentsTable
+        USE_TEXTRACT: "true"
+        USE_COMPREHEND: "true"
+        MAX_DOCUMENT_BYTES: !Ref MaxDocumentBytes
+        ALLOWED_EXTENSIONS: !Ref AllowedExtensions
+
+  Api:
+    Auth:
+      DefaultAuthorizer: AWS_IAM
+    MethodSettings:
+      - HttpMethod: "*"
+        ResourcePath: "/*"
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+
+Resources:
+  DocumentsApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      TracingEnabled: true
+
+  RawDocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireRawDocuments
+            Status: Enabled
+            ExpirationInDays: 30
+      VersioningConfiguration:
+        Status: Enabled
+
+  ProcessedDocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  DocumentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: document_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: document_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: ai_document_processor.handlers.ingest_handler
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref ProcessingStateMachine
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref RawDocumentsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !Ref ProcessingStateMachine
+      Events:
+        UploadDocument:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DocumentsApi
+            Path: /documents
+            Method: post
+
+  ParseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: ai_document_processor.handlers.parse_handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref RawDocumentsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - textract:DetectDocumentText
+              Resource: "*"
+
+  ClassifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: ai_document_processor.handlers.classify_handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - comprehend:DetectEntities
+              Resource: "*"
+
+  RouteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: ai_document_processor.handlers.route_handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ProcessedDocumentsBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocumentsTable
+
+  ProcessingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Definition:
+        StartAt: Parse
+        States:
+          Parse:
+            Type: Task
+            Resource: !GetAtt ParseFunction.Arn
+            Next: Classify
+          Classify:
+            Type: Task
+            Resource: !GetAtt ClassifyFunction.Arn
+            Next: Route
+          Route:
+            Type: Task
+            Resource: !GetAtt RouteFunction.Arn
+            End: true
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ParseFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ClassifyFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RouteFunction
+
+Outputs:
+  ApiBaseUrl:
+    Value: !Sub "https://${DocumentsApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+  RawBucketName:
+    Value: !Ref RawDocumentsBucket
+  ProcessedBucketName:
+    Value: !Ref ProcessedDocumentsBucket
+  DocumentsTableName:
+    Value: !Ref DocumentsTable
+  ProcessingStateMachineArn:
+    Value: !Ref ProcessingStateMachine

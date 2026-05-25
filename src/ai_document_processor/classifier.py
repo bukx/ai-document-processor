@@ -1,8 +1,11 @@
-"""Deterministic content classification and entity extraction."""
+"""Deterministic classification with optional Comprehend enrichment."""
 
 from __future__ import annotations
 
+import os
 import re
+
+from .aws_helpers import client
 
 
 CLASS_KEYWORDS = {
@@ -25,9 +28,31 @@ def classify_text(text: str) -> str:
 
 
 def extract_entities(text: str) -> dict[str, list[str]]:
-    return {
+    entities = {
         "emails": sorted(set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", text))),
         "dates": sorted(set(re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text))),
         "currency_amounts": sorted(set(re.findall(r"\$\d+(?:,\d{3})*(?:\.\d{2})?", text))),
         "invoice_ids": sorted(set(re.findall(r"INV-\d+", text))),
     }
+
+    if os.getenv("USE_COMPREHEND", "true").lower() != "true":
+        return entities
+
+    sample = text[:4500]
+    if not sample.strip():
+        return entities
+
+    try:
+        comprehend = client("comprehend")
+        response = comprehend.detect_entities(Text=sample, LanguageCode="en")
+    except Exception:
+        return entities
+
+    aws_entities = [
+        entity["Text"]
+        for entity in response.get("Entities", [])
+        if entity.get("Text")
+    ]
+    if aws_entities:
+        entities["comprehend_entities"] = sorted(set(aws_entities))
+    return entities

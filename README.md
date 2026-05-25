@@ -13,12 +13,36 @@ architecture:
 - classify content with a Comprehend-style adapter
 - emit structured JSON to the `output/` directory
 
+## Deployable AWS stack
+
+The repo now also includes a SAM template for:
+
+- API Gateway upload endpoint
+- raw and processed S3 buckets
+- Step Functions orchestration
+- Lambda stages for ingest, parse, classify, and route
+- DynamoDB result storage
+- Textract and Comprehend integrations
+
 ### Run locally
 
 ```bash
 python3 -m unittest discover -s tests -v
 PYTHONPATH=src python3 -m ai_document_processor.cli sample_documents/invoice.txt --output-dir output
 ```
+
+### Deploy to AWS
+
+```bash
+sam build
+sam deploy --guided
+```
+
+After deploy:
+
+- call `POST /documents` with JSON containing `filename` and base64 `content`
+- the API stores the file in S3 and starts the Step Functions workflow
+- processed JSON lands in the processed bucket and DynamoDB
 
 ![Architecture](./architecture.png)
 
